@@ -20,28 +20,23 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Constante de fuso horário
 TZ = ZoneInfo("America/Sao_Paulo")
 
-# Listas auxiliares para seleção de data
 MESES = [
     "Janeiro", "Fevereiro", "Março", "Abril",
     "Maio", "Junho", "Julho", "Agosto",
     "Setembro", "Outubro", "Novembro", "Dezembro"
 ]
 
-# Gera uma lista de anos (ano atual, anterior e próximos)
 ANO_ATUAL = datetime.now(TZ).year
 ANOS = [str(ano) for ano in range(ANO_ATUAL - 1, ANO_ATUAL + 3)]
 
-# Dicionário base mapeando os prefixos das escalas
 ESCALAS_DISPONIVEIS = {
     "1º Distrito": "escala_1_distrito",
     "2º Distrito": "escala_2_distrito",
     "Marítima e Ambiental": "escala_maritima_ambiental"
 }
 
-# Função auxiliar para gerar o nome do arquivo com o mês por extenso
 def gerar_nome_arquivo(prefixo_escala, nome_mes, ano):
     mes_limpo = nome_mes.lower().replace("ç", "c")
     return f"{prefixo_escala}_{mes_limpo}_{ano}.pdf"
@@ -82,14 +77,8 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown(
-    '<div class="main-title">📅 Sistema de Escalas | GCMCF</div>',
-    unsafe_allow_html=True
-)
-st.markdown(
-    '<div class="sub-title">Download seguro de escalas com marca d\'água digital e banco de dados Supabase.</div>',
-    unsafe_allow_html=True
-)
+st.markdown('<div class="main-title">📅 Sistema de Escalas | GCMCF</div>', unsafe_allow_html=True)
+st.markdown('<div class="sub-title">Download seguro de escalas com marca d\'água digital e banco de dados Supabase.</div>', unsafe_allow_html=True)
 
 # =====================================================
 # FUNÇÕES DE SEGURANÇA E SESSÃO
@@ -140,7 +129,7 @@ def conectar_supabase():
 supabase = conectar_supabase()
 
 # =====================================================
-# LEITURA DE DADOS E LOGS VIA SUPABASE (CACHE ATIVO)
+# LEITURA DE DADOS E LOGS VIA SUPABASE
 # =====================================================
 @st.cache_data(ttl=5)
 def carregar_usuarios():
@@ -181,31 +170,39 @@ def registrar_log(usuario, acao, detalhes=""):
         st.error(f"Falha ao registrar log no banco de dados: {e}")
 
 # =====================================================
-# OPERAÇÕES DE USUÁRIOS (SUPABASE)
+# OPERAÇÕES DE USUÁRIOS (LOGICA DE LOGIN REVISADA)
 # =====================================================
-def buscar_usuario_login(tipo_usuario, login):
-    if not supabase:
-        return None
-    try:
-        # Limpeza total de strings para evitar quebras por espaços ou caracteres ocultos
-        tipo_limpo = str(tipo_usuario).strip().lower()
-        login_limpo = str(login).strip()
-        
-        resposta = supabase.table("usuarios").select("*")\
-            .eq("tipo_usuario", tipo_limpo)\
-            .eq("login", login_limpo)\
-            .eq("status", "ATIVO").execute()
-        
-        if resposta.data:
-            return resposta.data[0]
-        return None
-    except Exception:
-        return None
-
 def login_usuario_supabase(tipo_usuario, login, senha):
-    user = buscar_usuario_login(tipo_usuario, login)
-    if user is not None and check_hashes(senha, str(user["senha"])):
-        # Alinhado estritamente com o seu banco (1 para Sim, 0 para Não)
+    if not supabase:
+        return {"sucesso": False, "erro": "Sem conexão com o banco"}
+    
+    try:
+        login_limpo = str(login).strip()
+        tipo_limpo = str(tipo_usuario).strip().lower()
+        
+        # Busca traz apenas o login para evitar conflitos de múltiplos filtros no Postgres
+        resposta = supabase.table("usuarios").select("*").eq("login", login_limpo).execute()
+        
+        if not resposta.data:
+            return {"sucesso": False, "erro": f"Usuário com o login '{login_limpo}' não foi encontrado no banco."}
+        
+        user = resposta.data[0]
+        
+        # Validações granulares feitas no lado do Python (mais seguro e rastreável)
+        if str(user.get("status")).strip().upper() != "ATIVO":
+            return {"sucesso": False, "erro": "Usuário encontrado, mas o status não está como 'ATIVO'."}
+            
+        if str(user.get("tipo_usuario")).strip().lower() != tipo_limpo:
+            return {"sucesso": False, "erro": f"Usuário encontrado, mas o perfil no banco é '{user.get('tipo_usuario')}' e você selecionou '{tipo_limpo}'."}
+            
+        # Validação de Hash de Senha
+        if not check_hashes(senha, str(user["senha"])):
+            return {
+                "sucesso": False, 
+                "erro": f"Senha incorreta. O sistema gerou o hash '{make_hashes(senha)}', mas no banco está salvo '{user['senha']}'."
+            }
+        
+        # Se passou em tudo, define o primeiro acesso
         p_acesso_valor = user.get("primeiro_acesso", 1)
         primeiro_acesso_bool = True if str(p_acesso_valor) == "1" else False
 
@@ -216,7 +213,9 @@ def login_usuario_supabase(tipo_usuario, login, senha):
             "login": str(user["login"]).strip(), 
             "primeiro_acesso": primeiro_acesso_bool
         }
-    return {"sucesso": False, "id": None, "nome": None, "login": None, "primeiro_acesso": None}
+        
+    except Exception as e:
+        return {"sucesso": False, "erro": f"Erro interno na execução da query: {e}"}
 
 def alterar_senha_usuario_supabase(id_usuario, nova_senha):
     if not supabase:
@@ -225,7 +224,7 @@ def alterar_senha_usuario_supabase(id_usuario, nova_senha):
         nova_senha_hash = make_hashes(nova_senha)
         resposta = supabase.table("usuarios").update({
             "senha": nova_senha_hash,
-            "primeiro_acesso": 0  # 0 para Não (Conforme seu SQL)
+            "primeiro_acesso": 0
         }).eq("id", id_usuario).execute()
         
         if resposta.data:
@@ -244,11 +243,9 @@ def alterar_senha_usuario_supabase(id_usuario, nova_senha):
 def criar_pdf_marca_dagua(matricula):
     buffer = BytesIO()
     c = canvas.Canvas(buffer, pagesize=A4)
-    
     opacidades = [0.15, 0.22, 0.28, 0.18]
     linha_texto = "  ".join([f"{matricula}"] * 50)
     
-    # Camada 1
     for i, y in enumerate(range(-400, 1200, 20)): 
         c.saveState()
         opacidade_atual = opacidades[i % len(opacidades)]
@@ -261,7 +258,6 @@ def criar_pdf_marca_dagua(matricula):
         c.drawString(0, 0, linha_texto)
         c.restoreState()
         
-    # Camada 2
     for i, y in enumerate(range(-400, 1200, 40)): 
         c.saveState()
         c.setFillColorRGB(0.1, 0.1, 0.1)
@@ -282,7 +278,6 @@ def aplicar_marca_dagua(pdf_original_bytes, matricula):
     try:
         pdf_original = PdfReader(BytesIO(pdf_original_bytes))
         pdf_marca = PdfReader(criar_pdf_marca_dagua(matricula))
-        
         escritor_pdf = PdfWriter()
         pagina_marca = pdf_marca.pages[0]
         
@@ -325,7 +320,7 @@ def baixar_escala_original(nome_arquivo_supabase):
         return None
 
 # =====================================================
-# INTERFACES VISUAIS (VIEWS ADMINISTRATIVAS - CRUD)
+# INTERFACES VISUAIS (VIEWS ADMINISTRATIVAS)
 # =====================================================
 def view_gerenciar_escala_admin():
     aba_escala, aba_usuarios = st.tabs(["📅 Publicar Escalas", "👥 Gerenciar Usuários"])
@@ -451,7 +446,6 @@ def view_visualizar_escala_usuario():
     st.info("Selecione o mês e o ano abaixo para listar as escalas disponíveis para download.")
     
     matricula = st.session_state.get("login_usuario", "SEM_MATRICULA").upper()
-    
     col_mes, col_ano = st.columns(2)
     with col_mes:
         mes_desejado = st.selectbox("Filtrar por Mês:", MESES)
@@ -475,7 +469,6 @@ def view_visualizar_escala_usuario():
         
         if pdf_original:
             pdf_com_marca = aplicar_marca_dagua(pdf_original, matricula)
-            
             st.download_button(
                 label=f"📥 Baixar Escala do {nome_exibicao} ({matricula})",
                 data=pdf_com_marca,
@@ -487,7 +480,6 @@ def view_visualizar_escala_usuario():
             )
         else:
             st.button(f"❌ Escala do {nome_exibicao} Não Publicada", key=file_key, disabled=True)
-            
         st.markdown("<br>", unsafe_allow_html=True)
 
 # =====================================================
@@ -503,19 +495,23 @@ def renderizar_tela_login():
         if not supabase:
             st.sidebar.error("Impossível autenticar. Conexão com banco offline.")
             return
-        res = login_usuario_supabase(tipo, login, senha)
-        if res["sucesso"]:
-            st.session_state["logado"] = True
-            st.session_state["usuario_id"] = res["id"]
-            st.session_state["tipo_usuario"] = tipo
-            st.session_state["nome_usuario"] = res["nome"]
-            st.session_state["login_usuario"] = res["login"]
-            st.session_state["primeiro_acesso"] = res["primeiro_acesso"]
-            st.success(f"Autenticado: {res['nome']}")
-            time.sleep(0.3)
-            st.rerun()
-        else:
-            st.sidebar.error("Credenciais inválidas ou Usuário Inativo.")
+            
+        with st.sidebar.spinner("Autenticando..."):
+            res = login_usuario_supabase(tipo, login, senha)
+            
+            if res["sucesso"]:
+                st.session_state["logado"] = True
+                st.session_state["usuario_id"] = res["id"]
+                st.session_state["tipo_usuario"] = tipo
+                st.session_state["nome_usuario"] = res["nome"]
+                st.session_state["login_usuario"] = res["login"]
+                st.session_state["primeiro_acesso"] = res["primeiro_acesso"]
+                st.success(f"Autenticado: {res['nome']}")
+                time.sleep(0.3)
+                st.rerun()
+            else:
+                # EXIBE O ERRO EXATO DETECTADO NO PYTHON
+                st.sidebar.error(f"Falha: {res['erro']}")
 
 def view_alterar_senha_obrigatoria():
     st.warning("⚠️ Altere sua senha padrão para prosseguir.")
