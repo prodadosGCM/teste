@@ -127,6 +127,10 @@ def logout():
 @st.cache_resource
 def conectar_supabase():
     try:
+        # Verifica se as chaves existem antes de tentar acessá-las para evitar o crash descritivo
+        if "SUPABASE_URL" not in st.secrets or "SUPABASE_KEY" not in st.secrets:
+            st.error("⚠️ Erro Crítico: As credenciais do Supabase não foram configuradas nos Secrets do Streamlit.")
+            return None
         url = st.secrets["SUPABASE_URL"]
         key = st.secrets["SUPABASE_KEY"]
         return create_client(url, key)
@@ -141,6 +145,8 @@ supabase = conectar_supabase()
 # =====================================================
 @st.cache_data(ttl=10)
 def carregar_usuarios():
+    if not supabase:
+        return pd.DataFrame()
     try:
         resposta = supabase.table("usuarios").select("*").order("id").execute()
         return pd.DataFrame(resposta.data)
@@ -150,6 +156,8 @@ def carregar_usuarios():
 
 @st.cache_data(ttl=10)
 def carregar_logs():
+    if not supabase:
+        return pd.DataFrame()
     try:
         resposta = supabase.table("log_auditoria").select("*").order("id", desc=True).execute()
         return pd.DataFrame(resposta.data)
@@ -158,6 +166,8 @@ def carregar_logs():
         return pd.DataFrame()
 
 def registrar_log(usuario, acao, detalhes=""):
+    if not supabase:
+        return
     agora = datetime.now(TZ)
     try:
         supabase.table("log_auditoria").insert({
@@ -175,6 +185,8 @@ def registrar_log(usuario, acao, detalhes=""):
 # OPERAÇÕES DE USUÁRIOS (SUPABASE)
 # =====================================================
 def buscar_usuario_login(tipo_usuario, login):
+    if not supabase:
+        return None
     try:
         resposta = supabase.table("usuarios").select("*")\
             .eq("tipo_usuario", tipo_usuario.strip().lower())\
@@ -198,6 +210,8 @@ def login_usuario_supabase(tipo_usuario, login, senha):
     return {"sucesso": False, "id": None, "nome": None, "login": None, "primeiro_acesso": None}
 
 def alterar_senha_usuario_supabase(id_usuario, nova_senha):
+    if not supabase:
+        return False
     try:
         nova_senha_hash = make_hashes(nova_senha)
         resposta = supabase.table("usuarios").update({
@@ -256,26 +270,31 @@ def criar_pdf_marca_dagua(matricula):
     return buffer
 
 def aplicar_marca_dagua(pdf_original_bytes, matricula):
-    pdf_original = PdfReader(BytesIO(pdf_original_bytes))
-    pdf_marca = PdfReader(criar_pdf_marca_dagua(matricula))
-    
-    escritor_pdf = PdfWriter()
-    pagina_marca = pdf_marca.pages[0]
-    
-    for pagina in pdf_original.pages:
-        pagina.merge_page(pagina_marca)
-        escritor_pdf.add_page(pagina)
+    try:
+        pdf_original = PdfReader(BytesIO(pdf_original_bytes))
+        pdf_marca = PdfReader(criar_pdf_marca_dagua(matricula))
         
-    buffer_saida = BytesIO()
-    escritor_pdf.write(buffer_saida)
-    buffer_saida.seek(0)
-    return buffer_saida.getvalue()
+        escritor_pdf = PdfWriter()
+        pagina_marca = pdf_marca.pages[0]
+        
+        for pagina in pdf_original.pages:
+            pagina.merge_page(pagina_marca)
+            escritor_pdf.add_page(pagina)
+            
+        buffer_saida = BytesIO()
+        escritor_pdf.write(buffer_saida)
+        buffer_saida.seek(0)
+        return buffer_saida.getvalue()
+    except Exception as e:
+        st.error(f"Erro ao processar marca d'água no PDF: {e}")
+        return pdf_original_bytes
 
 # =====================================================
 # ENGINE DE COMUNICAÇÃO (SUPABASE STORAGE)
 # =====================================================
 def fazer_upload_escala(arquivo_bytes, nome_arquivo_supabase):
-    if not supabase: return False
+    if not supabase: 
+        return False
     try:
         supabase.storage.from_("escalas").upload(
             path=nome_arquivo_supabase,
@@ -288,7 +307,8 @@ def fazer_upload_escala(arquivo_bytes, nome_arquivo_supabase):
         return False
 
 def baixar_escala_original(nome_arquivo_supabase):
-    if not supabase: return None
+    if not supabase: 
+        return None
     try:
         dados = supabase.storage.from_("escalas").download(nome_arquivo_supabase)
         return dados
@@ -305,7 +325,7 @@ def view_gerenciar_escala_admin():
         st.subheader("⚙️ Publicação de Escalas por Período")
         col_escala, col_mes, col_ano = st.columns(3)
         with col_escala:
-            escala_selecionada_admin = st.selectbox("Selecione a Escala:", list(ESCALAS_DISPONIVEIS.keys()))
+            escala_selecionada_admin = st.selectbox("Selecione a Escala:", list(ESCALAS_DISBOIVEIS.keys()) if 'ESCALAS_DISBOIVEIS' in globals() else list(ESCALAS_DISPONIVEIS.keys()))
         with col_mes:
             mes_selecionado_admin = st.selectbox("Mês de Referência:", MESES)
         with col_ano:
@@ -317,7 +337,9 @@ def view_gerenciar_escala_admin():
         arquivo_escala = st.file_uploader(f"Upload do arquivo para: {nome_arquivo_supabase}", type=["pdf"], key="uploader_admin")
         
         if st.button("Publicar Escala Oficial"):
-            if arquivo_escala:
+            if not supabase:
+                st.error("Banco de dados indisponível.")
+            elif arquivo_escala:
                 with st.spinner(f"Gravando '{nome_arquivo_supabase}'..."):
                     bytes_pdf = arquivo_escala.read()
                     if fazer_upload_escala(bytes_pdf, nome_arquivo_supabase):
@@ -344,7 +366,9 @@ def view_gerenciar_escala_admin():
                 botao_cadastrar = st.form_submit_button("Salvar Usuário")
                 
                 if botao_cadastrar:
-                    if not novo_nome or not nova_matricula:
+                    if not supabase:
+                        st.error("Banco de dados indisponível.")
+                    elif not novo_nome or not nova_matricula:
                         st.error("Campos obrigatórios vazios.")
                     elif str(nova_matricula) in df_users["login"].astype(str).values:
                         st.error("⚠️ Matrícula já cadastrada.")
@@ -384,7 +408,7 @@ def view_gerenciar_escala_admin():
                     with col_btn1: salvar_edicao = st.form_submit_button("💾 Salvar Alterações")
                     with col_btn2: forcar_reset = st.form_submit_button("🔄 Redefinir Senha (1234)")
                 
-                if salvar_edicao:
+                if salvar_edicao and supabase:
                     try:
                         supabase.table("usuarios").update({
                             "nome": edit_nome,
@@ -392,13 +416,13 @@ def view_gerenciar_escala_admin():
                             "tipo_usuario": edit_tipo,
                             "status": edit_status
                         }).eq("id", id_selecionado).execute()
-                        st.success("Dados alterados com sucesso!")
+                        st.success("Dados alteredos com sucesso!")
                         carregar_usuarios.clear()
                         st.rerun()
                     except Exception as e:
                         st.error(f"Erro ao atualizar dados: {e}")
                         
-                if forcar_reset:
+                if forcar_reset and supabase:
                     try:
                         supabase.table("usuarios").update({
                             "senha": make_hashes("1234"),
@@ -442,17 +466,16 @@ def view_visualizar_escala_usuario():
         
         if pdf_original:
             pdf_com_marca = aplicar_marca_dagua(pdf_original, matricula)
+            
+            # Ajuste de escopo para evitar disparos falsos de logs no on_click do Streamlit
             st.download_button(
                 label=f"📥 Baixar Escala do {nome_exibicao} ({matricula})",
                 data=pdf_com_marca,
                 file_name=f"{nome_arquivo_target.replace('.pdf', '')}_{matricula}.pdf",
                 mime="application/pdf",
                 key=file_key,
-                on_click=lambda f=nome_arquivo_target: registrar_log(
-                    st.session_state["nome_usuario"], 
-                    "DOWNLOAD_ESCALA", 
-                    f"{f} | Matrícula: {matricula}"
-                )
+                on_click=registrar_log,
+                args=(st.session_state["nome_usuario"], "DOWNLOAD_ESCALA", f"{nome_arquivo_target} | Matrícula: {matricula}")
             )
         else:
             st.button(f"❌ Escala do {nome_exibicao} Não Publicada", key=file_key, disabled=True)
@@ -469,6 +492,9 @@ def renderizar_tela_login():
     senha = st.sidebar.text_input("Senha Corporativa", type="password")
     
     if st.sidebar.button("Entrar no Sistema"):
+        if not supabase:
+            st.sidebar.error("Impossível autenticar. Conexão com banco offline.")
+            return
         res = login_usuario_supabase(tipo, login, senha)
         if res["sucesso"]:
             st.session_state["logado"] = True
@@ -500,30 +526,32 @@ def view_alterar_senha_obrigatoria():
                 time.sleep(1)
                 st.rerun()
 
-# Fluxo de Execução
-if not st.session_state["logado"]:
-    renderizar_tela_login()
-    st.info("Acesse a barra lateral esquerda para entrar com suas credenciais.")
-elif st.session_state["primeiro_acesso"]:
-    view_alterar_senha_obrigatoria()
+# Fluxo de Execução Principal
+if not supabase:
+    st.error("🛑 Erro de Conexão: Não foi possível estabelecer conexão com o banco de dados Supabase. Verifique suas configurações no painel 'Secrets' do Streamlit Cloud.")
 else:
-    st.sidebar.write(f"Usuário ativo: **{st.session_state['nome_usuario']}**")
-    st.sidebar.write(f"Credencial: `{st.session_state['tipo_usuario'].upper()}`")
-    
-    if st.session_state["tipo_usuario"] == "admin":
-        menu = st.sidebar.radio("Navegação", ["Painel Admin", "Relatório de Logs"])
-        if menu == "Painel Admin":
-            view_gerenciar_escala_admin()
-        elif menu == "Relatório de Logs":
-            st.subheader("📋 Auditoria Geral de Acesso a Escalas")
-            df_logs = carregar_logs()
-            if not df_logs.empty:
-                # Remove coluna 'id' interna na visualização se desejar
-                st.dataframe(df_logs[["data", "hora", "usuario", "acao", "detalhes"]], use_container_width=True)
-            else:
-                st.info("Nenhum log registrado.")
+    if not st.session_state["logado"]:
+        renderizar_tela_login()
+        st.info("Acesse a barra lateral esquerda para entrar com suas credenciais.")
+    elif st.session_state["primeiro_acesso"]:
+        view_alterar_senha_obrigatoria()
     else:
-        view_visualizar_escala_usuario()
+        st.sidebar.write(f"Usuário ativo: **{st.session_state['nome_usuario']}**")
+        st.sidebar.write(f"Credencial: `{st.session_state['tipo_usuario'].upper()}`")
         
-    if st.sidebar.button("Desconectar / Sair"):
-        logout()
+        if st.session_state["tipo_usuario"] == "admin":
+            menu = st.sidebar.radio("Navegação", ["Painel Admin", "Relatório de Logs"])
+            if menu == "Painel Admin":
+                view_gerenciar_escala_admin()
+            elif menu == "Relatório de Logs":
+                st.subheader("📋 Auditoria Geral de Acesso a Escalas")
+                df_logs = carregar_logs()
+                if not df_logs.empty:
+                    st.dataframe(df_logs[["data", "hora", "usuario", "acao", "detalhes"]], use_container_width=True)
+                else:
+                    st.info("Nenhum log registrado.")
+        else:
+            view_visualizar_escala_usuario()
+            
+        if st.sidebar.button("Desconectar / Sair"):
+            logout()
