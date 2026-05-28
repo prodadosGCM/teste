@@ -1,0 +1,7 @@
+streamlit
+gspread
+pandas
+google-api-python-client
+pypdf
+reportlab
+supabase
