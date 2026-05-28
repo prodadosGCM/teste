@@ -95,10 +95,10 @@ st.markdown(
 # FUNÇÕES DE SEGURANÇA E SESSÃO
 # =====================================================
 def make_hashes(password):
-    return hashlib.sha256(str.encode(password)).hexdigest()
+    return hashlib.sha256(str.encode(password.strip())).hexdigest()
 
 def check_hashes(password, hashed_text):
-    return make_hashes(password) == hashed_text
+    return make_hashes(password) == hashed_text.strip()
 
 def init_session():
     valores_padrao = {
@@ -130,8 +130,8 @@ def conectar_supabase():
         if "SUPABASE_URL" not in st.secrets or "SUPABASE_KEY" not in st.secrets:
             st.error("⚠️ Erro Crítico: As credenciais do Supabase não foram configuradas nos Secrets do Streamlit.")
             return None
-        url = st.secrets["SUPABASE_URL"]
-        key = st.secrets["SUPABASE_KEY"]
+        url = st.secrets["SUPABASE_URL"].strip()
+        key = st.secrets["SUPABASE_KEY"].strip()
         return create_client(url, key)
     except Exception as e:
         st.error(f"Erro nas credenciais do Supabase: {e}")
@@ -142,7 +142,7 @@ supabase = conectar_supabase()
 # =====================================================
 # LEITURA DE DADOS E LOGS VIA SUPABASE (CACHE ATIVO)
 # =====================================================
-@st.cache_data(ttl=10)
+@st.cache_data(ttl=5)
 def carregar_usuarios():
     if not supabase:
         return pd.DataFrame()
@@ -153,7 +153,7 @@ def carregar_usuarios():
         st.error(f"Erro ao carregar usuários: {e}")
         return pd.DataFrame()
 
-@st.cache_data(ttl=10)
+@st.cache_data(ttl=5)
 def carregar_logs():
     if not supabase:
         return pd.DataFrame()
@@ -172,9 +172,9 @@ def registrar_log(usuario, acao, detalhes=""):
         supabase.table("log_auditoria").insert({
             "data": agora.strftime("%d/%m/%Y"),
             "hora": agora.strftime("%H:%M:%S"),
-            "usuario": str(usuario).upper(),
-            "acao": str(acao).upper(),
-            "detalhes": str(detalhes).upper()
+            "usuario": str(usuario).strip().upper(),
+            "acao": str(acao).strip().upper(),
+            "detalhes": str(detalhes).strip().upper()
         }).execute()
         carregar_logs.clear()
     except Exception as e:
@@ -187,9 +187,13 @@ def buscar_usuario_login(tipo_usuario, login):
     if not supabase:
         return None
     try:
+        # Limpeza total de strings para evitar quebras por espaços ou caracteres ocultos
+        tipo_limpo = str(tipo_usuario).strip().lower()
+        login_limpo = str(login).strip()
+        
         resposta = supabase.table("usuarios").select("*")\
-            .eq("tipo_usuario", tipo_usuario.strip().lower())\
-            .eq("login", login.strip())\
+            .eq("tipo_usuario", tipo_limpo)\
+            .eq("login", login_limpo)\
             .eq("status", "ATIVO").execute()
         
         if resposta.data:
@@ -201,16 +205,16 @@ def buscar_usuario_login(tipo_usuario, login):
 def login_usuario_supabase(tipo_usuario, login, senha):
     user = buscar_usuario_login(tipo_usuario, login)
     if user is not None and check_hashes(senha, str(user["senha"])):
-        # CORREÇÃO CRÍTICA AQUI: Tratamento seguro para booleanos vindos do Supabase
-        p_acesso = user.get("primeiro_acesso", True)
-        if isinstance(p_acesso, bool):
-            primeiro_acesso_bool = p_acesso
-        else:
-            primeiro_acesso_bool = True if str(p_acesso) in ["1", "True", "true"] else False
+        # Alinhado estritamente com o seu banco (1 para Sim, 0 para Não)
+        p_acesso_valor = user.get("primeiro_acesso", 1)
+        primeiro_acesso_bool = True if str(p_acesso_valor) == "1" else False
 
         return {
-            "sucesso": True, "id": int(user["id"]), "nome": str(user["nome"]),
-            "login": str(user["login"]), "primeiro_acesso": primeiro_acesso_bool
+            "sucesso": True, 
+            "id": int(user["id"]), 
+            "nome": str(user["nome"]).strip(),
+            "login": str(user["login"]).strip(), 
+            "primeiro_acesso": primeiro_acesso_bool
         }
     return {"sucesso": False, "id": None, "nome": None, "login": None, "primeiro_acesso": None}
 
@@ -221,7 +225,7 @@ def alterar_senha_usuario_supabase(id_usuario, nova_senha):
         nova_senha_hash = make_hashes(nova_senha)
         resposta = supabase.table("usuarios").update({
             "senha": nova_senha_hash,
-            "primeiro_acesso": False  # Atualizado para salvar como booleano nativo
+            "primeiro_acesso": 0  # 0 para Não (Conforme seu SQL)
         }).eq("id", id_usuario).execute()
         
         if resposta.data:
@@ -330,7 +334,6 @@ def view_gerenciar_escala_admin():
         st.subheader("⚙️ Publicação de Escalas por Período")
         col_escala, col_mes, col_ano = st.columns(3)
         with col_escala:
-            # CORREÇÃO AQUI: Removido o typo do dicionário
             escala_selecionada_admin = st.selectbox("Selecione a Escala:", list(ESCALAS_DISPONIVEIS.keys()))
         with col_mes:
             mes_selecionado_admin = st.selectbox("Mês de Referência:", MESES)
@@ -376,16 +379,16 @@ def view_gerenciar_escala_admin():
                         st.error("Banco de dados indisponível.")
                     elif not novo_nome or not nova_matricula:
                         st.error("Campos obrigatórios vazios.")
-                    elif str(nova_matricula) in df_users["login"].astype(str).values:
+                    elif str(nova_matricula).strip() in df_users["login"].astype(str).str.strip().values:
                         st.error("⚠️ Matrícula já cadastrada.")
                     else:
                         try:
                             supabase.table("usuarios").insert({
                                 "tipo_usuario": tipo_func,
-                                "login": nova_matricula,
-                                "nome": novo_nome,
+                                "login": nova_matricula.strip(),
+                                "nome": novo_nome.strip(),
                                 "senha": make_hashes(senha_padrao),
-                                "primeiro_acesso": True,
+                                "primeiro_acesso": 1,
                                 "status": "ATIVO"
                             }).execute()
                             st.success(f"✅ {novo_nome} cadastrado!")
@@ -417,8 +420,8 @@ def view_gerenciar_escala_admin():
                 if salvar_edicao and supabase:
                     try:
                         supabase.table("usuarios").update({
-                            "nome": edit_nome,
-                            "login": edit_login,
+                            "nome": edit_nome.strip(),
+                            "login": edit_login.strip(),
                             "tipo_usuario": edit_tipo,
                             "status": edit_status
                         }).eq("id", id_selecionado).execute()
@@ -432,7 +435,7 @@ def view_gerenciar_escala_admin():
                     try:
                         supabase.table("usuarios").update({
                             "senha": make_hashes("1234"),
-                            "primeiro_acesso": True
+                            "primeiro_acesso": 1
                         }).eq("id", id_selecionado).execute()
                         st.success("Senha resetada para '1234' com sucesso!")
                         carregar_usuarios.clear()
@@ -509,7 +512,7 @@ def renderizar_tela_login():
             st.session_state["login_usuario"] = res["login"]
             st.session_state["primeiro_acesso"] = res["primeiro_acesso"]
             st.success(f"Autenticado: {res['nome']}")
-            time.sleep(0.5)
+            time.sleep(0.3)
             st.rerun()
         else:
             st.sidebar.error("Credenciais inválidas ou Usuário Inativo.")
@@ -528,7 +531,7 @@ def view_alterar_senha_obrigatoria():
             if alterar_senha_usuario_supabase(st.session_state["usuario_id"], nova_senha):
                 st.success("Senha alterada com sucesso!")
                 st.session_state["primeiro_acesso"] = False
-                time.sleep(0.5)
+                time.sleep(0.3)
                 st.rerun()
 
 # Fluxo de Execução Principal
