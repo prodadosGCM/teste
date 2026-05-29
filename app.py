@@ -511,7 +511,7 @@ def renderizar_tela_login():
                 st.rerun()
             else:
                 # EXIBE O ERRO EXATO DETECTADO NO PYTHON
-                st.sidebar.error(f"Falha apagar o codigo: {res['erro']}")
+                st.sidebar.error(f"Senha ou usuário incorreto")
 
 def view_alterar_senha_obrigatoria():
     st.warning("⚠️ Altere sua senha padrão para prosseguir.")
