@@ -252,7 +252,7 @@ def criar_pdf_marca_dagua(matricula):
         c.setFillColorRGB(0, 0, 0)
         c.setFillAlpha(opacidade_atual)
         c.setFont("Helvetica-Bold", 10)
-        x_dinamico = -200 - (y * 0.4) + (i % 2 * 15)
+        x_dinamico = -200 - (y * 0.4) + (i % 1 * 15)
         c.translate(x_dinamico, y) 
         c.rotate(35)
         c.drawString(0, 0, linha_texto)
